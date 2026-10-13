@@ -1,0 +1,1233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PDF Rotate and OCR</title>
+<style>
+  :root { --bg:#f4f5f7; --card:#fff; --ink:#1d2330; --muted:#677084; --line:#d9dde5; --accent:#1f4e8c; --accent2:#e8eef8; --sel:#2f6fd0; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Segoe UI",Arial,sans-serif; background:var(--bg); color:var(--ink); }
+  header { background:var(--accent); color:#fff; padding:14px 22px; }
+  header h1 { margin:0; font-size:19px; font-weight:600; }
+  header p { margin:4px 0 0; font-size:12.5px; opacity:.85; }
+  .panel { background:var(--card); border:1px solid var(--line); border-radius:8px; margin:14px 22px 0; padding:12px 14px; }
+  .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  .row + .row { margin-top:10px; }
+  .lbl { font-size:12.5px; color:var(--muted); margin-right:2px; }
+  button, select, input[type=text] { font:inherit; font-size:13.5px; padding:7px 11px; border:1px solid var(--line); border-radius:6px; background:#fff; color:var(--ink); }
+  button { cursor:pointer; }
+  button:hover:not(:disabled) { background:var(--accent2); border-color:var(--accent); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  button.primary:hover:not(:disabled) { background:#173b6b; }
+  input[type=text] { width:150px; }
+  .sep { width:1px; height:24px; background:var(--line); margin:0 4px; }
+  #fname { font-size:13px; color:var(--muted); }
+  #drop { border:2px dashed var(--line); border-radius:8px; margin:14px 22px 0; padding:38px 20px; text-align:center; color:var(--muted); background:#fafbfc; }
+  #drop.over { border-color:var(--sel); background:var(--accent2); }
+  #grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); gap:12px; padding:14px 22px 40px; }
+  .card { background:var(--card); border:2px solid var(--line); border-radius:8px; padding:8px; cursor:pointer; user-select:none; }
+  .card.sel { border-color:var(--sel); background:var(--accent2); }
+  .thumb { height:230px; display:flex; align-items:center; justify-content:center; background:#e9ecf1; border-radius:4px; overflow:hidden; }
+  .thumb canvas { max-width:100%; max-height:100%; box-shadow:0 1px 4px rgba(0,0,0,.25); background:#fff; }
+  .meta { display:flex; align-items:center; justify-content:space-between; margin-top:7px; font-size:13px; }
+  .meta .pg { font-weight:600; }
+  .src { font-size:11px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:2px; }
+  .rb { font-size:11.5px; color:#b3541e; min-height:15px; }
+  .mini button { padding:3px 9px; font-size:15px; line-height:1; }
+  .done { font-size:11.5px; color:#1b7a3d; }
+  progress { width:260px; height:14px; }
+  #status, #reduceInfo { font-size:13px; color:var(--muted); }
+  #log { font-size:12px; color:var(--muted); max-height:110px; overflow:auto; white-space:pre-wrap; margin-top:8px; }
+  .note { font-size:12px; color:var(--muted); margin-top:8px; line-height:1.5; }
+  #searchPanel { position:sticky; top:0; z-index:10; box-shadow:0 3px 10px rgba(0,0,0,.14); }
+  #searchTxt { width:320px; max-width:100%; }
+  #results { max-height:140px; overflow:auto; margin-top:10px; border-top:1px solid var(--line); font-size:13px; }
+  .hit { padding:5px 6px; border-bottom:1px solid #eef0f4; cursor:pointer; }
+  .hit:hover { background:var(--accent2); }
+  .hit.cur { background:#fff3c4; }
+  .hit b { color:var(--accent); }
+  .nohit { padding:8px 6px; color:var(--muted); line-height:1.5; }
+  mark { background:#ffe58a; padding:0 1px; }
+  .card.found { border-color:#f0b429; }
+  .fb { font-size:11.5px; color:#8a6d00; font-weight:600; }
+  dialog { border:1px solid var(--line); border-radius:8px; padding:16px; width:min(380px, 92vw); color:var(--ink); }
+  dialog::backdrop { background:rgba(0,0,0,.4); }
+  .warn { color:#b3261e; }
+</style>
+</head>
+<body>
+<header>
+  <h1>PDF Rotate and OCR</h1>
+  <p>Rotate pages, add JPG or PNG images and other PDFs, remove pages, search, make scanned pages searchable in Marathi, Hindi and English, and reduce file size. Your files are processed inside this browser tab and are not uploaded anywhere.</p>
+</header>
+
+<div id="drop">
+  <p style="margin:0 0 12px;font-size:15px;">Drag PDF files or images (JPG, PNG, WebP) here, or</p>
+  <button class="primary" id="openBtn">Open files</button>
+  <input type="file" id="file" accept="application/pdf,.pdf,image/*" multiple hidden>
+  <div id="openMsg" class="note"></div>
+</div>
+
+<div id="tools" hidden>
+  <div class="panel">
+    <div class="row">
+      <span id="fname"></span>
+      <button id="openBtn2">Open another file</button>
+      <button id="closeBtn">Close PDF</button>
+    </div>
+    <div class="row">
+      <span class="lbl">Pages:</span>
+      <button id="addBtn">Add images or PDF</button>
+      <input type="file" id="addFile" accept="application/pdf,.pdf,image/*" multiple hidden>
+      <span class="lbl">Insert</span>
+      <select id="insertAt">
+        <option value="end" selected>at the end</option>
+        <option value="start">at the start</option>
+        <option value="after">after the last selected page</option>
+      </select>
+      <button id="removeBtn">Remove selected pages</button>
+      <span class="lbl">You can also drop files anywhere on this page to add them.</span>
+    </div>
+    <div class="row">
+      <span class="lbl">Select:</span>
+      <button id="selAll">All</button>
+      <button id="selNone">None</button>
+      <button id="selOdd">Odd</button>
+      <button id="selEven">Even</button>
+      <input type="text" id="rangeTxt" placeholder="e.g. 1-3, 7, 10-12">
+      <button id="selRange">Select range</button>
+      <span class="sep"></span>
+      <span id="selCount" class="lbl">0 selected</span>
+    </div>
+    <div class="row">
+      <span class="lbl">Rotate selected pages:</span>
+      <button id="rotL">&#8634; 90&deg; left</button>
+      <button id="rotR">&#8635; 90&deg; right</button>
+      <button id="rot180">180&deg;</button>
+      <span class="sep"></span>
+      <button id="rotAllR">Rotate all right</button>
+      <button id="resetRot">Reset all rotation</button>
+      <span class="sep"></span>
+      <button class="primary" id="saveBtn">Save PDF</button>
+    </div>
+  </div>
+</div>
+
+<div class="panel" id="searchPanel" hidden>
+  <div class="row">
+    <span class="lbl">Search in PDF:</span>
+    <input type="text" id="searchTxt" placeholder="Type a word or phrase (Marathi or English)">
+    <button class="primary" id="searchBtn">Search</button>
+    <button id="prevHit" disabled>&#9664; Previous</button>
+    <button id="nextHit" disabled>Next &#9654;</button>
+    <button id="clearSearch">Clear</button>
+    <span id="searchInfo" class="lbl"></span>
+  </div>
+  <div id="results" hidden></div>
+</div>
+
+<div id="tools2" hidden>
+  <div class="panel">
+    <div class="row">
+      <span class="lbl">OCR language:</span>
+      <select id="lang">
+        <option value="mar+eng" selected>Marathi + English</option>
+        <option value="mar">Marathi only</option>
+        <option value="hin+eng">Hindi + English</option>
+        <option value="mar+hin+eng">Marathi + Hindi + English</option>
+        <option value="eng">English only</option>
+      </select>
+      <span class="lbl">Pages:</span>
+      <select id="scope">
+        <option value="selected">Selected pages</option>
+        <option value="all">All pages</option>
+      </select>
+      <span class="lbl">Scan quality:</span>
+      <select id="dpi">
+        <option value="150">150 dpi (faster)</option>
+        <option value="200" selected>200 dpi (balanced)</option>
+        <option value="300">300 dpi (best accuracy, slower)</option>
+      </select>
+      <label style="font-size:13px;"><input type="checkbox" id="skipText" checked> Skip pages that already have text</label>
+    </div>
+    <div class="row">
+      <button class="primary" id="ocrBtn">Run OCR and save searchable PDF</button>
+      <button id="cancelBtn" disabled>Cancel</button>
+      <button id="txtBtn" disabled>Save OCR text (.txt)</button>
+      <progress id="bar" value="0" max="100"></progress>
+      <span id="status">Ready</span>
+    </div>
+    <div id="log"></div>
+    <div class="note">
+      Any rotation you set above is applied before OCR, so rotate sideways or upside down scans first for correct recognition. The first OCR run downloads the OCR engine and the Marathi language data, so an internet connection is needed once; the browser keeps them afterwards. Marathi OCR is slower than English, and a 200 dpi page typically takes several seconds.
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="row">
+      <span class="lbl">Reduce PDF size:</span>
+      <select id="level">
+        <option value="light">Light (high quality)</option>
+        <option value="medium" selected>Medium (recommended)</option>
+        <option value="strong">Strong (smallest file)</option>
+      </select>
+      <label style="font-size:13px;"><input type="checkbox" id="grayChk"> Convert images to grayscale</label>
+      <button class="primary" id="reduceBtn">Reduce size and save PDF</button>
+      <progress id="reduceBar" value="0" max="100"></progress>
+      <span id="reduceInfo"></span>
+    </div>
+    <div class="note">
+      This lowers the resolution and quality of the images inside the pages. Text, OCR text layers, page order and rotation are kept. It works best on scanned and photographed pages. A PDF that is mostly text, or whose scans are already small, may not shrink much, and in that case no file is saved. Always check the reduced file before replacing the original. To reduce a scan that you have just run through OCR, open the saved _OCR.pdf and reduce that one.
+    </div>
+  </div>
+</div>
+
+<div id="grid"></div>
+
+<dialog id="pwDlg">
+  <form id="pwForm">
+    <p id="pwText" style="margin:0 0 10px;font-size:14px;line-height:1.4"></p>
+    <input type="password" id="pwInput" autocomplete="off" style="width:100%;font:inherit;padding:7px 11px;border:1px solid var(--line);border-radius:6px">
+    <div style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end">
+      <button type="button" id="pwCancel">Cancel</button>
+      <button type="submit" class="primary" id="pwOk">Open</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+if (window.pdfjsLib) {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+}
+
+let sources = [];            // opened PDF files: { name, bytes, doc, lib }
+let P = [];                  // pages in display order
+let baseName = "document", docLabel = "";
+let sel = new Set();         // selected page objects
+let docToken = 0, cancelFlag = false, busy = false, observer = null;
+let renderQueue = Promise.resolve();
+let hits = [], hitIdx = -1, lastQuery = "", searching = false, dirty = false;
+
+function log(t) { const l = $("log"); l.textContent += t + "\n"; l.scrollTop = l.scrollHeight; }
+function setStatus(t, p) { $("status").textContent = t; if (p != null) $("bar").value = p; }
+function setReduce(t, p) { $("reduceInfo").textContent = t; if (p != null) $("reduceBar").value = p; }
+function fmtSize(n) { return n >= 1048576 ? (n / 1048576).toFixed(2) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB"; }
+
+function download(bytes, name, type) {
+  const blob = new Blob([bytes], { type });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+}
+
+/* ---------- Reading files into pages ---------- */
+const IMG_EXT = /\.(jpe?g|png|webp|bmp|gif|avif|tiff?)$/i;
+function isPdfFile(f) { return f.type === "application/pdf" || /\.pdf$/i.test(f.name); }
+function isImgFile(f) { return /^image\//.test(f.type) || IMG_EXT.test(f.name); }
+function stripExt(n) { return n.replace(/\.[^.]+$/, ""); }
+function newPage(o) { return Object.assign({ rot: 0, ocr: null, nat: null, done: false, el: null, thumb: null }, o); }
+
+function askPassword(fileName, wrong) {
+  return new Promise(resolve => {
+    const dlg = $("pwDlg");
+    $("pwText").textContent = (wrong ? "That password is not correct. " : "") + "Enter the password to open " + fileName;
+    $("pwInput").value = "";
+    const done = v => { try { dlg.close(); } catch (e) {} resolve(v); };
+    $("pwCancel").onclick = () => done(null);
+    $("pwForm").onsubmit = e => { e.preventDefault(); done($("pwInput").value); };
+    dlg.oncancel = e => { e.preventDefault(); done(null); };
+    dlg.showModal();
+    $("pwInput").focus();
+  });
+}
+
+async function openPdfDoc(bytes, name) {
+  const task = pdfjsLib.getDocument(Object.assign({ data: bytes.slice() }, window.PDFJS_OPTS || {}));
+  let abort;
+  const aborted = new Promise((_, rej) => { abort = rej; });
+  task.onPassword = async (update, reason) => {
+    const pw = await askPassword(name, reason === 2);
+    if (pw === null) {
+      const e = new Error("no password entered");
+      e.name = "PasswordCancelled";
+      abort(e);
+      try { task.destroy(); } catch (x) {}
+    } else {
+      update(pw);
+    }
+  };
+  return await Promise.race([task.promise, aborted]);
+}
+
+// Pages of a PDF that cannot be edited directly are converted to images at 200 dpi
+async function rasterizeDoc(doc, label, msg) {
+  const pages = [];
+  for (let i = 1; i <= doc.numPages; i++) {
+    msg("Converting " + label + " to images: page " + i + " of " + doc.numPages);
+    const page = await doc.getPage(i);
+    const v1 = page.getViewport({ scale: 1 });
+    const vp = page.getViewport({ scale: 200 / 72 });
+    const canvas = blankCanvas(vp.width, vp.height);
+    await page.render({ canvasContext: canvas.getContext("2d"), viewport: vp }).promise;
+    const blob = await new Promise(r => canvas.toBlob(r, "image/jpeg", 0.9));
+    canvas.width = canvas.height = 1;
+    if (!blob) throw new Error("could not convert page " + i);
+    pages.push(newPage({
+      t: "img", jpg: new Uint8Array(await blob.arrayBuffer()),
+      w: v1.width, h: v1.height, dx: 0, dy: 0, dw: v1.width, dh: v1.height, label
+    }));
+    page.cleanup();
+  }
+  return pages;
+}
+
+async function loadPdfFile(file, msg) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const doc = await openPdfDoc(bytes, file.name);
+  // The writer library must be able to read the file too, otherwise pages could not be saved
+  let lib = null, why = "";
+  try {
+    lib = await PDFLib.PDFDocument.load(bytes, { updateMetadata: false });
+  } catch (e) {
+    console.error(e);
+    why = /encrypt/i.test(String((e && e.name) + " " + (e && e.message)))
+      ? "is protected by encryption"
+      : "uses a structure that this tool cannot edit directly";
+  }
+  if (!lib) {
+    const pages = await rasterizeDoc(doc, file.name, msg);
+    try { doc.destroy(); } catch (e) {}
+    return { src: null, pages, note: file.name + " " + why + ", so its pages were converted to images. Text in them cannot be selected until you run OCR." };
+  }
+  const src = { name: file.name, bytes, doc, lib };
+  const pages = [];
+  for (let i = 0; i < doc.numPages; i++) pages.push(newPage({ t: "pdf", src, idx: i, label: file.name }));
+  return { src, pages, note: "" };
+}
+
+async function loadImageFile(file) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = new Image();
+    img.src = url;
+    await img.decode();
+    const iw = img.naturalWidth, ih = img.naturalHeight;
+    if (!iw || !ih) throw new Error("empty image");
+    const s = Math.min(1, 4000 / Math.max(iw, ih));
+    const cw = Math.max(1, Math.round(iw * s)), ch = Math.max(1, Math.round(ih * s));
+    const c = document.createElement("canvas");
+    c.width = cw; c.height = ch;
+    const x = c.getContext("2d");
+    x.fillStyle = "#fff"; x.fillRect(0, 0, cw, ch);
+    x.imageSmoothingQuality = "high";
+    x.drawImage(img, 0, 0, cw, ch);
+    const blob = await new Promise(r => c.toBlob(r, "image/jpeg", 0.92));
+    if (!blob) throw new Error("could not encode image");
+    const jpg = new Uint8Array(await blob.arrayBuffer());
+    // Fit the image on an A4 page (portrait or landscape to match the image)
+    const land = cw > ch;
+    const W = land ? 841.89 : 595.28, H = land ? 595.28 : 841.89;
+    const k = Math.min(W / cw, H / ch);
+    const dw = cw * k, dh = ch * k;
+    return newPage({ t: "img", jpg, w: W, h: H, dx: (W - dw) / 2, dy: (H - dh) / 2, dw, dh, label: file.name });
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function describeError(err, isPdf) {
+  const name = (err && err.name) || "";
+  const msg = (err && err.message) || String(err);
+  if (name === "PasswordCancelled") return "skipped because no password was entered";
+  if (name === "PasswordException") return "needs a password, and the password was not accepted";
+  if (isPdf) {
+    if (/(pdfjsLib|PDFLib) is not defined/.test(msg)) return "the PDF libraries did not load (" + msg + "). Reload the page. If you installed the app, check that the lib folder was uploaded next to index.html.";
+    if (/worker/i.test(msg)) return "the PDF engine could not start (" + msg + "). Reload the page. If you installed the app, check that the lib folder was uploaded next to index.html.";
+    if (name === "InvalidPDFException" || /invalid pdf|xref|header/i.test(msg)) return "is not a valid PDF or is damaged (" + msg + ")";
+    return "could not be opened (" + (name ? name + ": " : "") + msg + ")";
+  }
+  return "could not be read as an image (" + msg + "). TIFF and some other formats are not supported by the browser, please convert to JPG or PNG";
+}
+
+function missingLibs() {
+  const out = [];
+  if (!window.pdfjsLib) out.push("PDF viewer engine (pdf.js)");
+  if (!window.PDFLib) out.push("PDF writer (pdf-lib)");
+  return out;
+}
+function libsMessage(list) {
+  return "These parts of the tool did not load: " + list.join(", ") + ".\n\nReload the page. The single file version needs an internet connection. If you installed the app, make sure the whole lib folder was uploaded next to index.html.";
+}
+
+async function readFiles(files, msg) {
+  const pages = [], srcs = [], errors = [], notes = [];
+  let n = 0;
+  for (const f of files) {
+    n++;
+    msg("Reading file " + n + " of " + files.length + ": " + f.name);
+    try {
+      if (isPdfFile(f)) {
+        const r = await loadPdfFile(f, msg);
+        if (r.src) srcs.push(r.src);
+        r.pages.forEach(p => pages.push(p));
+        if (r.note) notes.push(r.note);
+      } else if (isImgFile(f)) {
+        pages.push(await loadImageFile(f));
+      } else {
+        errors.push(f.name + ": not a PDF or an image");
+      }
+    } catch (err) {
+      console.error(err);
+      errors.push(f.name + ": " + describeError(err, isPdfFile(f)));
+    }
+  }
+  return { pages, srcs, errors, notes };
+}
+
+/* ---------- Opening, adding, closing ---------- */
+function showWorkspace(on) {
+  ["tools", "searchPanel", "tools2"].forEach(id => $(id).hidden = !on);
+  $("drop").hidden = on;
+}
+
+function teardown() {
+  docToken++;
+  if (observer) { observer.disconnect(); observer = null; }
+  sources.forEach(s => { try { Promise.resolve(s.doc.destroy()).catch(() => {}); } catch (e) {} });
+  sources = []; P = []; sel = new Set();
+  dirty = false; baseName = "document"; docLabel = "";
+  renderQueue = Promise.resolve();
+  $("grid").innerHTML = "";
+  $("log").textContent = "";
+  $("rangeTxt").value = "";
+  $("searchTxt").value = "";
+  resetSearchUI();
+  updateSelCount();
+  $("txtBtn").disabled = true;
+  setStatus("Ready", 0);
+  setReduce("", 0);
+}
+
+async function openFiles(files) {
+  if (busy || !files.length) return;
+  if (P.length && dirty && !confirm("Open new files? Changes to the current PDF that you have not saved will be lost.")) return;
+  const miss = missingLibs();
+  if (miss.length) { alert(libsMessage(miss)); return; }
+  const { pages, srcs, errors, notes } = await readFiles(files, t => $("openMsg").textContent = t);
+  $("openMsg").textContent = "";
+  if (!pages.length) {
+    alert("Could not open the file.\n\n" + errors.join("\n"));
+    return;
+  }
+  teardown();
+  sources = srcs;
+  P = pages;
+  docLabel = pages[0].label;
+  baseName = stripExt(docLabel);
+  showWorkspace(true);
+  refreshGrid();
+  if (notes.length) alert(notes.join("\n\n"));
+  if (errors.length) alert("Some files could not be opened:\n\n" + errors.join("\n"));
+}
+
+function insertIndex() {
+  const mode = $("insertAt").value;
+  if (mode === "start") return 0;
+  if (mode === "after") {
+    let last = -1;
+    P.forEach((p, i) => { if (sel.has(p)) last = i; });
+    if (last >= 0) return last + 1;
+  }
+  return P.length;
+}
+
+async function addFiles(files) {
+  if (busy || !P.length || !files.length) return;
+  const miss = missingLibs();
+  if (miss.length) { alert(libsMessage(miss)); return; }
+  lockUI(true);
+  try {
+    const { pages, srcs, errors, notes } = await readFiles(files, t => setStatus(t));
+    if (!pages.length) {
+      setStatus("Ready", 0);
+      alert("No pages were added.\n\n" + errors.join("\n"));
+      return;
+    }
+    const at = insertIndex();
+    P.splice(at, 0, ...pages);
+    srcs.forEach(s => sources.push(s));
+    dirty = true;
+    refreshGrid();
+    setSel(new Set(pages));
+    if (pages[0].el) pages[0].el.scrollIntoView({ behavior: "smooth", block: "center" });
+    setStatus("Added " + pages.length + " page(s)", 0);
+    if (notes.length) alert(notes.join("\n\n"));
+    if (errors.length) alert("Some files could not be added:\n\n" + errors.join("\n"));
+  } catch (err) {
+    console.error(err);
+    alert("Could not add the files.\n\n" + (err && err.message ? err.message : err));
+    setStatus("Add failed", 0);
+  } finally {
+    lockUI(false);
+  }
+}
+
+function removeSelected() {
+  const list = selectedPages();
+  if (!list.length) { alert("Select the pages you want to remove first."); return; }
+  if (list.length >= P.length) { alert("A PDF needs at least one page. Use Close PDF instead."); return; }
+  if (!confirm("Remove " + list.length + " selected page(s) from this PDF? Your original file on disk is not changed.")) return;
+  P = P.filter(p => !sel.has(p));
+  sel = new Set();
+  dirty = true;
+  refreshGrid();
+  setStatus(list.length + " page(s) removed", 0);
+}
+
+$("openBtn").onclick = $("openBtn2").onclick = () => $("file").click();
+$("file").onchange = e => { const f = [...e.target.files]; e.target.value = ""; if (f.length) openFiles(f); };
+$("addBtn").onclick = () => $("addFile").click();
+$("addFile").onchange = e => { const f = [...e.target.files]; e.target.value = ""; if (f.length) addFiles(f); };
+$("removeBtn").onclick = removeSelected;
+
+["dragenter", "dragover"].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); $("drop").classList.add("over"); }));
+["dragleave", "drop"].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); $("drop").classList.remove("over"); }));
+document.addEventListener("drop", e => {
+  const files = [...e.dataTransfer.files];
+  if (!files.length || busy) return;
+  if (P.length) addFiles(files); else openFiles(files);
+});
+
+$("closeBtn").onclick = () => {
+  if (busy) return;
+  if (dirty && !confirm("Close this PDF? Changes that you have not saved will be lost.")) return;
+  teardown();
+  showWorkspace(false);
+  window.scrollTo(0, 0);
+};
+
+/* ---------- Page grid and thumbnails ---------- */
+function refreshGrid() {
+  resetSearchUI();
+  buildGrid();
+  updateSelCount();
+  $("fname").textContent = docLabel + "  (" + P.length + " pages)";
+}
+
+function buildGrid() {
+  const grid = $("grid");
+  grid.innerHTML = "";
+  if (observer) observer.disconnect();
+  const obs = new IntersectionObserver((entries, o) => {
+    entries.forEach(en => {
+      if (en.isIntersecting) {
+        o.unobserve(en.target);
+        const pg = en.target._pg;
+        if (pg && !pg.thumb) queueRender(pg);
+      }
+    });
+  }, { rootMargin: "400px" });
+  observer = obs;
+
+  P.forEach((pg, i) => {
+    const c = document.createElement("div");
+    c.className = "card" + (sel.has(pg) ? " sel" : "");
+    c._pg = pg;
+    c.innerHTML =
+      '<div class="thumb"></div>' +
+      '<div class="meta"><span class="pg"></span>' +
+      '<span class="mini"><button data-act="l" title="Rotate left">&#8634;</button> <button data-act="r" title="Rotate right">&#8635;</button></span></div>' +
+      '<div class="src"></div><div class="rb"></div><div class="fb"></div><div class="done"></div>';
+    c.querySelector(".pg").textContent = "Page " + (i + 1);
+    const s = c.querySelector(".src");
+    if (pg.label !== docLabel) { s.textContent = pg.label; s.title = pg.label; }
+    c.querySelector(".done").textContent = pg.done ? "OCR done" : "";
+    c.onclick = e => {
+      const b = e.target.closest("button");
+      if (b) { rotatePages([pg], b.dataset.act === "l" ? -90 : 90); return; }
+      toggleSel(pg);
+    };
+    pg.el = c;
+    grid.appendChild(c);
+    updateBadge(pg);
+    if (pg.thumb) c.querySelector(".thumb").appendChild(pg.thumb);
+    else obs.observe(c);
+  });
+}
+
+function queueRender(pg) {
+  const tok = docToken;
+  renderQueue = renderQueue.then(() => renderThumb(pg, tok)).catch(e => {
+    if (!(e && e.name === "RenderingCancelledException")) console.error(e);
+  });
+}
+
+async function renderThumb(pg, tok) {
+  if (tok !== docToken) return;
+  const [W, H] = await pageSize(pg);
+  const scale = (230 / Math.max(W, H)) * 1.5;
+  const canvas = await renderToCanvas(pg, scale);
+  if (tok !== docToken) return;
+  pg.thumb = canvas;
+  if (pg.el) {
+    const t = pg.el.querySelector(".thumb");
+    t.innerHTML = "";
+    t.appendChild(canvas);
+  }
+}
+
+/* ---------- Rendering a page (PDF page or image page) ---------- */
+async function pageSize(pg) {
+  if (pg.t === "pdf") {
+    const page = await pg.src.doc.getPage(pg.idx + 1);
+    const v = page.getViewport({ scale: 1, rotation: (page.rotate + pg.rot) % 360 });
+    return [v.width, v.height];
+  }
+  return pg.rot % 180 ? [pg.h, pg.w] : [pg.w, pg.h];
+}
+
+function blankCanvas(w, h) {
+  const c = document.createElement("canvas");
+  c.width = Math.max(1, Math.round(w));
+  c.height = Math.max(1, Math.round(h));
+  const x = c.getContext("2d");
+  x.fillStyle = "#fff";
+  x.fillRect(0, 0, c.width, c.height);
+  return c;
+}
+
+async function renderToCanvas(pg, scale) {
+  if (pg.t === "pdf") {
+    const page = await pg.src.doc.getPage(pg.idx + 1);
+    const vp = page.getViewport({ scale, rotation: (page.rotate + pg.rot) % 360 });
+    const canvas = blankCanvas(vp.width, vp.height);
+    await page.render({ canvasContext: canvas.getContext("2d"), viewport: vp }).promise;
+    return canvas;
+  }
+  const swap = pg.rot % 180 !== 0;
+  const canvas = blankCanvas((swap ? pg.h : pg.w) * scale, (swap ? pg.w : pg.h) * scale);
+  const x = canvas.getContext("2d");
+  const bmp = await createImageBitmap(new Blob([pg.jpg], { type: "image/jpeg" }));
+  x.save();
+  x.translate(canvas.width / 2, canvas.height / 2);
+  x.rotate(pg.rot * Math.PI / 180);
+  x.translate(-pg.w * scale / 2, -pg.h * scale / 2);
+  x.imageSmoothingQuality = "high";
+  x.drawImage(bmp, pg.dx * scale, pg.dy * scale, pg.dw * scale, pg.dh * scale);
+  x.restore();
+  bmp.close();
+  return canvas;
+}
+
+function rotatePages(list, delta) {
+  if (busy) return;
+  list.forEach(pg => {
+    pg.rot = ((pg.rot + delta) % 360 + 360) % 360;
+    dirty = true;
+    updateBadge(pg);
+    queueRender(pg);
+  });
+}
+function updateBadge(pg) {
+  if (pg.el) pg.el.querySelector(".rb").textContent = pg.rot ? "Rotated " + pg.rot + "° clockwise" : "";
+}
+
+/* ---------- Selection ---------- */
+function toggleSel(pg) { sel.has(pg) ? sel.delete(pg) : sel.add(pg); paintSel(pg); updateSelCount(); }
+function paintSel(pg) { if (pg.el) pg.el.classList.toggle("sel", sel.has(pg)); }
+function setSel(set) { sel = set; P.forEach(paintSel); updateSelCount(); }
+function updateSelCount() { $("selCount").textContent = sel.size + " selected"; }
+function selectedPages() { return P.filter(p => sel.has(p)); }
+
+$("selAll").onclick = () => setSel(new Set(P));
+$("selNone").onclick = () => setSel(new Set());
+$("selOdd").onclick = () => setSel(new Set(P.filter((p, i) => i % 2 === 0)));
+$("selEven").onclick = () => setSel(new Set(P.filter((p, i) => i % 2 === 1)));
+$("selRange").onclick = () => {
+  const s = new Set();
+  $("rangeTxt").value.split(",").forEach(part => {
+    const m = part.trim().match(/^(\d+)(?:\s*-\s*(\d+))?$/);
+    if (!m) return;
+    const a = +m[1], b = m[2] ? +m[2] : a;
+    for (let p = Math.min(a, b); p <= Math.max(a, b); p++) if (p >= 1 && p <= P.length) s.add(P[p - 1]);
+  });
+  setSel(s);
+};
+
+function needSel() { if (!sel.size) { alert("Select at least one page first."); return false; } return true; }
+$("rotL").onclick = () => { if (needSel()) rotatePages(selectedPages(), -90); };
+$("rotR").onclick = () => { if (needSel()) rotatePages(selectedPages(), 90); };
+$("rot180").onclick = () => { if (needSel()) rotatePages(selectedPages(), 180); };
+$("rotAllR").onclick = () => rotatePages(P.slice(), 90);
+$("resetRot").onclick = () => {
+  const changed = P.filter(p => p.rot !== 0);
+  if (!changed.length) return;
+  changed.forEach(pg => { pg.rot = 0; updateBadge(pg); queueRender(pg); });
+  dirty = true;
+};
+
+/* ---------- Build output PDF ---------- */
+async function buildPdf(ocrMap) {
+  const { PDFDocument, degrees } = PDFLib;
+  const out = await PDFDocument.create();
+
+  // Copy plain PDF pages one source at a time so shared resources stay shared
+  const copied = new Map();
+  for (const src of sources) {
+    const plain = P.filter(p => p.t === "pdf" && p.src === src && !ocrMap.has(p));
+    if (!plain.length) continue;
+    if (!src.lib) src.lib = await PDFDocument.load(src.bytes, { updateMetadata: false });
+    const cps = await out.copyPages(src.lib, plain.map(p => p.idx));
+    plain.forEach((p, k) => copied.set(p, cps[k]));
+  }
+
+  for (const pg of P) {
+    if (ocrMap.has(pg)) {
+      const [W, H] = await pageSize(pg);
+      const ocrDoc = await PDFDocument.load(ocrMap.get(pg));
+      const [emb] = await out.embedPdf(ocrDoc, [0]);
+      const p = out.addPage([W, H]);
+      p.drawPage(emb, { x: 0, y: 0, width: W, height: H });
+    } else if (pg.t === "pdf") {
+      const cp = copied.get(pg);
+      cp.setRotation(degrees(((cp.getRotation().angle + pg.rot) % 360 + 360) % 360));
+      out.addPage(cp);
+    } else {
+      const img = await out.embedJpg(pg.jpg);
+      const p = out.addPage([pg.w, pg.h]);
+      p.drawImage(img, { x: pg.dx, y: pg.h - pg.dy - pg.dh, width: pg.dw, height: pg.dh });
+      if (pg.rot) p.setRotation(degrees(pg.rot));
+    }
+  }
+  return out;
+}
+
+function lockUI(on) {
+  busy = on;
+  ["saveBtn", "ocrBtn", "rotL", "rotR", "rot180", "rotAllR", "resetRot", "openBtn2", "closeBtn", "addBtn", "removeBtn", "reduceBtn"]
+    .forEach(id => $(id).disabled = on);
+  $("cancelBtn").disabled = !on;
+}
+
+$("saveBtn").onclick = async () => {
+  if (!P.length) return;
+  lockUI(true);
+  try {
+    setStatus("Saving...", 30);
+    const out = await buildPdf(new Map());
+    const bytes = await out.save();
+    download(bytes, baseName + "_edited.pdf", "application/pdf");
+    dirty = false;
+    setStatus("Saved " + baseName + "_edited.pdf (" + fmtSize(bytes.length) + ")", 100);
+  } catch (err) {
+    console.error(err);
+    alert("Could not save the PDF.\n\n" + (err && err.message ? err.message : err));
+    setStatus("Save failed", 0);
+  }
+  lockUI(false);
+};
+
+/* ---------- OCR ---------- */
+$("cancelBtn").onclick = () => {
+  cancelFlag = true;
+  setStatus("Cancelling after the current step...");
+  setReduce("Cancelling after the current image...");
+};
+
+$("ocrBtn").onclick = async () => {
+  if (!P.length) return;
+  if (!window.Tesseract) { alert("The OCR engine could not be loaded. Please check your internet connection and reload this page."); return; }
+
+  const targets = $("scope").value === "all" ? P.slice() : selectedPages();
+  if (!targets.length) { alert("Select at least one page, or choose All pages."); return; }
+
+  const lang = $("lang").value;
+  const dpi = +$("dpi").value;
+  const skipText = $("skipText").checked;
+
+  lockUI(true);
+  cancelFlag = false;
+  $("log").textContent = "";
+  $("txtBtn").disabled = true;
+  P.forEach(p => { p.ocr = null; p.done = false; if (p.el) p.el.querySelector(".done").textContent = ""; });
+  const ocrMap = new Map();
+  let worker = null;
+  let curLabel = "";
+
+  try {
+    setStatus("Loading OCR engine and " + lang + " language data...", 2);
+    worker = await Tesseract.createWorker(lang, 1, Object.assign({}, window.TESS_OPTS || {}, {
+      logger: m => {
+        if (m.status === "recognizing text") {
+          setStatus(curLabel + " recognising " + Math.round(m.progress * 100) + "%");
+        } else if (m.status && /load|init/.test(m.status)) {
+          setStatus("Preparing OCR: " + m.status);
+        }
+      }
+    }));
+    await worker.setParameters({ preserve_interword_spaces: "1" });
+
+    let done = 0;
+    for (const pg of targets) {
+      if (cancelFlag) break;
+      const num = P.indexOf(pg) + 1;
+      curLabel = "Page " + num + " (" + (done + 1) + " of " + targets.length + "):";
+      setStatus(curLabel + " preparing", Math.round(done / targets.length * 100));
+
+      if (skipText && pg.t === "pdf") {
+        const page = await pg.src.doc.getPage(pg.idx + 1);
+        const tc = await page.getTextContent();
+        const chars = tc.items.map(x => x.str).join("").trim().length;
+        if (chars > 30) {
+          log("Page " + num + ": already has text, skipped");
+          done++;
+          continue;
+        }
+      }
+
+      const canvas = await renderToCanvas(pg, dpi / 72);
+      const blob = await new Promise(res => canvas.toBlob(res, "image/jpeg", 0.85));
+      canvas.width = canvas.height = 1;
+
+      const { data } = await worker.recognize(blob, {}, { pdf: true });
+      ocrMap.set(pg, new Uint8Array(data.pdf));
+      pg.ocr = data.text || "";
+      pg.done = true;
+      const words = pg.ocr.trim().split(/\s+/).filter(Boolean).length;
+      log("Page " + num + ": recognised " + words + " words");
+      if (pg.el) pg.el.querySelector(".done").textContent = "OCR done";
+      done++;
+    }
+
+    await worker.terminate();
+    worker = null;
+
+    if (!ocrMap.size) {
+      setStatus(cancelFlag ? "Cancelled. Nothing to save." : "No pages needed OCR.", 0);
+      lockUI(false);
+      return;
+    }
+
+    setStatus("Building searchable PDF...", 95);
+    const out = await buildPdf(ocrMap);
+    const bytes = await out.save();
+    download(bytes, baseName + "_OCR.pdf", "application/pdf");
+    $("txtBtn").disabled = false;
+    dirty = false;
+    setStatus((cancelFlag ? "Cancelled early. " : "") + "Saved " + baseName + "_OCR.pdf (" + fmtSize(bytes.length) + ")", 100);
+  } catch (err) {
+    console.error(err);
+    if (worker) { try { await worker.terminate(); } catch (e) {} }
+    alert("OCR failed.\n\n" + (err && err.message ? err.message : err));
+    setStatus("OCR failed", 0);
+  }
+  lockUI(false);
+};
+
+$("txtBtn").onclick = () => {
+  const parts = [];
+  P.forEach((p, i) => { if (p.ocr != null) parts.push("----- Page " + (i + 1) + " -----\n" + p.ocr.trim()); });
+  if (!parts.length) return;
+  download("﻿" + parts.join("\n\n"), baseName + "_OCR.txt", "text/plain;charset=utf-8");
+};
+
+/* ---------- Reduce size ---------- */
+const LEVELS = {
+  light:  { maxSide: 3000, q: 0.80 },
+  medium: { maxSide: 2200, q: 0.65 },
+  strong: { maxSide: 1600, q: 0.50 }
+};
+
+async function inflate(bytes) {
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+function unPng(data, colors, bpc, columns) {
+  const bpp = Math.max(1, Math.ceil(colors * bpc / 8));
+  const rowBytes = Math.ceil(colors * bpc * columns / 8);
+  const rows = Math.floor(data.length / (rowBytes + 1));
+  const out = new Uint8Array(rows * rowBytes);
+  for (let r = 0; r < rows; r++) {
+    const ft = data[r * (rowBytes + 1)];
+    const inOff = r * (rowBytes + 1) + 1, outOff = r * rowBytes, prevOff = outOff - rowBytes;
+    for (let i = 0; i < rowBytes; i++) {
+      const x = data[inOff + i];
+      const a = i >= bpp ? out[outOff + i - bpp] : 0;
+      const b = r > 0 ? out[prevOff + i] : 0;
+      const c = (r > 0 && i >= bpp) ? out[prevOff + i - bpp] : 0;
+      let v;
+      switch (ft) {
+        case 1: v = x + a; break;
+        case 2: v = x + b; break;
+        case 3: v = x + ((a + b) >> 1); break;
+        case 4: {
+          const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
+          v = x + ((pa <= pb && pa <= pc) ? a : (pb <= pc ? b : c));
+          break;
+        }
+        default: v = x;
+      }
+      out[outOff + i] = v & 255;
+    }
+  }
+  return out;
+}
+
+async function decodeJpegBitmap(bytes) {
+  const blob = new Blob([bytes], { type: "image/jpeg" });
+  try { return await createImageBitmap(blob, { imageOrientation: "none" }); }
+  catch (e) { return await createImageBitmap(blob); }
+}
+
+async function recompressImages(out, opt, progress) {
+  const { PDFName, PDFRawStream, PDFRef, PDFArray, PDFDict } = PDFLib;
+  const ctx = out.context;
+  const N_ = n => PDFName.of(n);
+  const num = (o, d) => (o && typeof o.asNumber === "function") ? o.asNumber() : d;
+
+  // Collect image streams and the ones used as masks (these must stay untouched)
+  const imgs = [];
+  const masks = new Set();
+  for (const [ref, obj] of ctx.enumerateIndirectObjects()) {
+    if (!(obj instanceof PDFRawStream)) continue;
+    const st = obj.dict.get(N_("Subtype"));
+    if (!st || st.toString() !== "/Image") continue;
+    imgs.push([ref, obj]);
+    for (const k of ["SMask", "Mask"]) {
+      const v = obj.dict.get(N_(k));
+      if (v instanceof PDFRef) masks.add(v.toString());
+    }
+  }
+
+  const components = d => {
+    const cs = d.lookup(N_("ColorSpace"));
+    if (cs instanceof PDFName) {
+      const n = cs.toString();
+      return n === "/DeviceRGB" ? 3 : (n === "/DeviceGray" ? 1 : 0);
+    }
+    if (cs instanceof PDFArray && cs.size() >= 2) {
+      const first = cs.lookup(0);
+      if (first && first.toString() === "/ICCBased") {
+        const s = cs.lookup(1);
+        const n = s && s.dict ? num(s.dict.lookup(N_("N")), 0) : 0;
+        return (n === 3 || n === 1) ? n : 0;
+      }
+    }
+    return 0;
+  };
+
+  const stats = { total: imgs.length, done: 0, skipped: 0 };
+  let k = 0;
+  for (const [ref, stream] of imgs) {
+    if (cancelFlag) break;
+    k++;
+    progress(k, imgs.length);
+    try {
+      const d = stream.dict;
+      if (masks.has(ref.toString())) { stats.skipped++; continue; }
+      if (d.has(N_("SMask")) || d.has(N_("Mask")) || d.has(N_("Decode"))) { stats.skipped++; continue; }
+      const im = d.lookup(N_("ImageMask"));
+      if (im && im.toString() === "true") { stats.skipped++; continue; }
+      const w = num(d.lookup(N_("Width")), 0), h = num(d.lookup(N_("Height")), 0);
+      const bpc = num(d.lookup(N_("BitsPerComponent")), 0);
+      const nc = components(d);
+      if (!w || !h || bpc !== 8 || !nc || w * h < 40000 || w * h > 25e6) { stats.skipped++; continue; }
+
+      let f = d.lookup(N_("Filter"));
+      if (f instanceof PDFArray) f = f.size() === 1 ? f.lookup(0) : null;
+      const fname = f ? f.toString() : "";
+      const orig = stream.getContents();
+
+      let source;
+      if (fname === "/DCTDecode") {
+        source = await decodeJpegBitmap(orig);
+        if (source.width !== w || source.height !== h) { source.close(); stats.skipped++; continue; }
+      } else if (fname === "/FlateDecode") {
+        let raw = await inflate(orig);
+        let dp = d.lookup(N_("DecodeParms"));
+        if (dp instanceof PDFArray) dp = dp.size() === 1 ? dp.lookup(0) : null;
+        if (dp instanceof PDFDict) {
+          const pred = num(dp.lookup(N_("Predictor")), 1);
+          if (pred >= 10) raw = unPng(raw, num(dp.lookup(N_("Colors")), 1), num(dp.lookup(N_("BitsPerComponent")), 8), num(dp.lookup(N_("Columns")), 1));
+          else if (pred !== 1) { stats.skipped++; continue; }
+        }
+        if (raw.length < w * h * nc) { stats.skipped++; continue; }
+        const id = new ImageData(w, h);
+        const px = id.data;
+        const total = w * h;
+        if (nc === 3) {
+          for (let i = 0, j = 0; i < total; i++, j += 3) {
+            px[i * 4] = raw[j]; px[i * 4 + 1] = raw[j + 1]; px[i * 4 + 2] = raw[j + 2]; px[i * 4 + 3] = 255;
+          }
+        } else {
+          for (let i = 0; i < total; i++) {
+            const v = raw[i];
+            px[i * 4] = px[i * 4 + 1] = px[i * 4 + 2] = v; px[i * 4 + 3] = 255;
+          }
+        }
+        source = document.createElement("canvas");
+        source.width = w; source.height = h;
+        source.getContext("2d").putImageData(id, 0, 0);
+      } else {
+        stats.skipped++;
+        continue;
+      }
+
+      const s = Math.min(1, opt.maxSide / Math.max(w, h));
+      const nw = Math.max(1, Math.round(w * s)), nh = Math.max(1, Math.round(h * s));
+      const c = blankCanvas(nw, nh);
+      const x = c.getContext("2d");
+      x.imageSmoothingQuality = "high";
+      x.drawImage(source, 0, 0, nw, nh);
+      if (source.close) source.close();
+      if (opt.gray) {
+        const id2 = x.getImageData(0, 0, nw, nh);
+        const p2 = id2.data;
+        for (let i = 0; i < p2.length; i += 4) {
+          const g = (p2[i] * 299 + p2[i + 1] * 587 + p2[i + 2] * 114) / 1000;
+          p2[i] = p2[i + 1] = p2[i + 2] = g;
+        }
+        x.putImageData(id2, 0, 0);
+      }
+      const blob = await new Promise(r => c.toBlob(r, "image/jpeg", opt.q));
+      c.width = c.height = 1;
+      if (!blob) { stats.skipped++; continue; }
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      if (bytes.length > orig.length * 0.92) { stats.skipped++; continue; }
+
+      ctx.assign(ref, ctx.stream(bytes, {
+        Type: "XObject", Subtype: "Image", Width: nw, Height: nh,
+        ColorSpace: "DeviceRGB", BitsPerComponent: 8, Filter: "DCTDecode"
+      }));
+      stats.done++;
+    } catch (err) {
+      console.error(err);
+      stats.skipped++;
+    }
+  }
+  return stats;
+}
+
+$("reduceBtn").onclick = async () => {
+  if (!P.length) return;
+  if (!("DecompressionStream" in window)) { alert("This browser is too old for this feature. Please update Chrome."); return; }
+  lockUI(true);
+  cancelFlag = false;
+  setReduce("Building PDF...", 3);
+  try {
+    const out = await buildPdf(new Map());
+    setReduce("Measuring current size...", 8);
+    const base = await out.save();
+    const opt = Object.assign({ gray: $("grayChk").checked }, LEVELS[$("level").value]);
+    const st = await recompressImages(out, opt, (i, n) =>
+      setReduce("Compressing image " + i + " of " + n + "...", 10 + Math.round(80 * i / Math.max(1, n))));
+    if (cancelFlag) {
+      setReduce("Cancelled. Nothing was saved.", 0);
+    } else if (!st.done) {
+      setReduce("No images could be made smaller (" + st.total + " images found), so no file was saved. Current size " + fmtSize(base.length) + ".", 100);
+    } else {
+      setReduce("Writing file...", 95);
+      const small = await out.save();
+      if (small.length >= base.length * 0.98) {
+        setReduce("The result is not smaller than the current file (" + fmtSize(base.length) + "), so no file was saved. Try Strong or grayscale.", 100);
+      } else {
+        download(small, baseName + "_reduced.pdf", "application/pdf");
+        const pct = Math.round((1 - small.length / base.length) * 100);
+        setReduce("Saved " + baseName + "_reduced.pdf. " + fmtSize(base.length) + " reduced to " + fmtSize(small.length) + " (" + pct + "% smaller). " + st.done + " of " + st.total + " images recompressed.", 100);
+      }
+    }
+  } catch (err) {
+    console.error(err);
+    alert("Could not reduce the PDF.\n\n" + (err && err.message ? err.message : err));
+    setReduce("Reduce failed", 0);
+  }
+  lockUI(false);
+};
+
+/* ---------- Search ---------- */
+function norm(s, strip) {
+  s = s.normalize("NFC").toLowerCase().replace(/[​‌‍﻿]/g, "");
+  return strip ? s.replace(/\s+/g, "") : s.replace(/\s+/g, " ");
+}
+
+async function pageText(pg) {
+  if (pg.nat == null) {
+    if (pg.t === "pdf") {
+      const page = await pg.src.doc.getPage(pg.idx + 1);
+      const tc = await page.getTextContent();
+      pg.nat = tc.items.map(x => x.str + (x.hasEOL ? " " : "")).join("");
+    } else {
+      pg.nat = "";
+    }
+  }
+  return pg.nat + (pg.ocr ? " " + pg.ocr : "");
+}
+
+async function scanPages(needle, strip, tok) {
+  const out = [];
+  let empty = 0, capped = false;
+  for (let i = 0; i < P.length && !capped; i++) {
+    if (tok !== docToken) return null;
+    $("searchInfo").textContent = "Searching page " + (i + 1) + " of " + P.length + "...";
+    const raw = await pageText(P[i]);
+    if (!raw.trim()) empty++;
+    const hay = norm(raw, strip);
+    let pos = hay.indexOf(needle);
+    while (pos !== -1) {
+      if (out.length >= 500) { capped = true; break; }
+      out.push({
+        pg: P[i],
+        page: i,
+        before: hay.slice(Math.max(0, pos - 35), pos),
+        match: hay.substr(pos, needle.length),
+        after: hay.slice(pos + needle.length, pos + needle.length + 45)
+      });
+      pos = hay.indexOf(needle, pos + needle.length);
+    }
+  }
+  return { out, empty, capped };
+}
+
+async function doSearch() {
+  if (!P.length || searching) return;
+  const q = $("searchTxt").value.trim();
+  if (!q) { alert("Type a word or phrase to search."); return; }
+  searching = true;
+  $("searchBtn").disabled = true;
+  const tok = docToken;
+  try {
+    let res = await scanPages(norm(q, false), false, tok);
+    let ignoredSpaces = false;
+    if (res && !res.out.length) {
+      const stripped = norm(q, true);
+      if (stripped) { res = await scanPages(stripped, true, tok); ignoredSpaces = true; }
+    }
+    if (!res || tok !== docToken) return;
+    lastQuery = q;
+    showResults(res, ignoredSpaces);
+  } catch (err) {
+    console.error(err);
+    $("searchInfo").textContent = "";
+    alert("Search failed.\n\n" + (err && err.message ? err.message : err));
+  } finally {
+    searching = false;
+    $("searchBtn").disabled = false;
+  }
+}
+
+function showResults(res, ignoredSpaces) {
+  hits = res.out;
+  hitIdx = -1;
+  const counts = new Map();
+  hits.forEach(h => counts.set(h.pg, (counts.get(h.pg) || 0) + 1));
+  P.forEach(pg => {
+    if (!pg.el) return;
+    const n = counts.get(pg) || 0;
+    pg.el.classList.toggle("found", n > 0);
+    pg.el.querySelector(".fb").textContent = n ? n + (n === 1 ? " match" : " matches") : "";
+  });
+  const box = $("results");
+  box.innerHTML = "";
+  box.hidden = false;
+
+  if (!hits.length) {
+    $("searchInfo").textContent = "No match found";
+    $("prevHit").disabled = $("nextHit").disabled = true;
+    const d = document.createElement("div");
+    d.className = "nohit";
+    d.textContent = "No match found." + (res.empty
+      ? " " + res.empty + " page(s) have no text because they are scanned images. Run OCR on them first, then search again."
+      : "");
+    box.appendChild(d);
+    return;
+  }
+
+  hits.forEach((h, idx) => {
+    const d = document.createElement("div");
+    d.className = "hit";
+    d.dataset.idx = idx;
+    const pg = document.createElement("b");
+    pg.textContent = "Page " + (h.page + 1) + ": ";
+    const mk = document.createElement("mark");
+    mk.textContent = h.match;
+    d.append(pg, (h.before.length >= 35 ? "…" : "") + h.before, mk, h.after + (h.after.length >= 45 ? "…" : ""));
+    d.onclick = () => goToHit(idx);
+    box.appendChild(d);
+  });
+  $("prevHit").disabled = $("nextHit").disabled = false;
+  $("searchInfo").textContent = hits.length + (res.capped ? "+" : "") + " matches on " + counts.size + " page(s)" + (ignoredSpaces ? " (ignoring spaces)" : "");
+  goToHit(0);
+}
+
+function goToHit(idx) {
+  if (!hits.length) return;
+  hitIdx = ((idx % hits.length) + hits.length) % hits.length;
+  const h = hits[hitIdx];
+  document.querySelectorAll(".hit.cur").forEach(e => e.classList.remove("cur"));
+  const el = $("results").querySelector('.hit[data-idx="' + hitIdx + '"]');
+  if (el) {
+    el.classList.add("cur");
+    const box = $("results");
+    box.scrollTop = Math.max(0, el.offsetTop - box.clientHeight / 2);
+  }
+  if (h.pg.el) h.pg.el.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+function resetSearchUI() {
+  hits = [];
+  hitIdx = -1;
+  lastQuery = "";
+  $("results").innerHTML = "";
+  $("results").hidden = true;
+  $("searchInfo").textContent = "";
+  $("prevHit").disabled = $("nextHit").disabled = true;
+}
+
+function clearSearch() {
+  $("searchTxt").value = "";
+  resetSearchUI();
+  P.forEach(pg => {
+    if (!pg.el) return;
+    pg.el.classList.remove("found");
+    pg.el.querySelector(".fb").textContent = "";
+  });
+}
+
+(function () {
+  const miss = missingLibs();
+  if (miss.length) {
+    const m = $("openMsg");
+    m.className = "note warn";
+    m.textContent = "Warning: " + libsMessage(miss).replace(/\n+/g, " ");
+  }
+})();
+
+$("searchBtn").onclick = doSearch;
+$("nextHit").onclick = () => goToHit(hitIdx + 1);
+$("prevHit").onclick = () => goToHit(hitIdx - 1);
+$("clearSearch").onclick = clearSearch;
+document.addEventListener("keydown", e => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f" && P.length) {
+    e.preventDefault();
+    $("searchTxt").focus();
+    $("searchTxt").select();
+  } else if (e.key === "Enter" && e.target === $("searchTxt")) {
+    e.preventDefault();
+    if (hits.length && $("searchTxt").value.trim() === lastQuery) goToHit(e.shiftKey ? hitIdx - 1 : hitIdx + 1);
+    else doSearch();
+  }
+});
+</script>
+</body>
+</html>
