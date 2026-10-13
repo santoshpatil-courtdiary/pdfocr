@@ -55,6 +55,9 @@
   mark { background:#ffe58a; padding:0 1px; }
   .card.found { border-color:#f0b429; }
   .fb { font-size:11.5px; color:#8a6d00; font-weight:600; }
+  dialog { border:1px solid var(--line); border-radius:8px; padding:16px; width:min(380px, 92vw); color:var(--ink); }
+  dialog::backdrop { background:rgba(0,0,0,.4); }
+  .warn { color:#b3261e; }
 </style>
 </head>
 <body>
@@ -186,6 +189,17 @@
 
 <div id="grid"></div>
 
+<dialog id="pwDlg">
+  <form id="pwForm">
+    <p id="pwText" style="margin:0 0 10px;font-size:14px;line-height:1.4"></p>
+    <input type="password" id="pwInput" autocomplete="off" style="width:100%;font:inherit;padding:7px 11px;border:1px solid var(--line);border-radius:6px">
+    <div style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end">
+      <button type="button" id="pwCancel">Cancel</button>
+      <button type="submit" class="primary" id="pwOk">Open</button>
+    </div>
+  </form>
+</dialog>
+
 <script>
 (function () {
   var b = new URL("lib/", location.href).href;
@@ -233,13 +247,82 @@ function isImgFile(f) { return /^image\//.test(f.type) || IMG_EXT.test(f.name); 
 function stripExt(n) { return n.replace(/\.[^.]+$/, ""); }
 function newPage(o) { return Object.assign({ rot: 0, ocr: null, nat: null, done: false, el: null, thumb: null }, o); }
 
-async function loadPdfFile(file) {
+function askPassword(fileName, wrong) {
+  return new Promise(resolve => {
+    const dlg = $("pwDlg");
+    $("pwText").textContent = (wrong ? "That password is not correct. " : "") + "Enter the password to open " + fileName;
+    $("pwInput").value = "";
+    const done = v => { try { dlg.close(); } catch (e) {} resolve(v); };
+    $("pwCancel").onclick = () => done(null);
+    $("pwForm").onsubmit = e => { e.preventDefault(); done($("pwInput").value); };
+    dlg.oncancel = e => { e.preventDefault(); done(null); };
+    dlg.showModal();
+    $("pwInput").focus();
+  });
+}
+
+async function openPdfDoc(bytes, name) {
+  const task = pdfjsLib.getDocument(Object.assign({ data: bytes.slice() }, window.PDFJS_OPTS || {}));
+  let abort;
+  const aborted = new Promise((_, rej) => { abort = rej; });
+  task.onPassword = async (update, reason) => {
+    const pw = await askPassword(name, reason === 2);
+    if (pw === null) {
+      const e = new Error("no password entered");
+      e.name = "PasswordCancelled";
+      abort(e);
+      try { task.destroy(); } catch (x) {}
+    } else {
+      update(pw);
+    }
+  };
+  return await Promise.race([task.promise, aborted]);
+}
+
+// Pages of a PDF that cannot be edited directly are converted to images at 200 dpi
+async function rasterizeDoc(doc, label, msg) {
+  const pages = [];
+  for (let i = 1; i <= doc.numPages; i++) {
+    msg("Converting " + label + " to images: page " + i + " of " + doc.numPages);
+    const page = await doc.getPage(i);
+    const v1 = page.getViewport({ scale: 1 });
+    const vp = page.getViewport({ scale: 200 / 72 });
+    const canvas = blankCanvas(vp.width, vp.height);
+    await page.render({ canvasContext: canvas.getContext("2d"), viewport: vp }).promise;
+    const blob = await new Promise(r => canvas.toBlob(r, "image/jpeg", 0.9));
+    canvas.width = canvas.height = 1;
+    if (!blob) throw new Error("could not convert page " + i);
+    pages.push(newPage({
+      t: "img", jpg: new Uint8Array(await blob.arrayBuffer()),
+      w: v1.width, h: v1.height, dx: 0, dy: 0, dw: v1.width, dh: v1.height, label
+    }));
+    page.cleanup();
+  }
+  return pages;
+}
+
+async function loadPdfFile(file, msg) {
   const bytes = new Uint8Array(await file.arrayBuffer());
-  const doc = await pdfjsLib.getDocument(Object.assign({ data: bytes.slice() }, window.PDFJS_OPTS || {})).promise;
-  const src = { name: file.name, bytes, doc, lib: null };
+  const doc = await openPdfDoc(bytes, file.name);
+  // The writer library must be able to read the file too, otherwise pages could not be saved
+  let lib = null, why = "";
+  try {
+    lib = await PDFLib.PDFDocument.load(bytes, { updateMetadata: false });
+  } catch (e) {
+    console.error(e);
+    why = /encrypt/i.test(String((e && e.name) + " " + (e && e.message)))
+      ? "is protected by encryption"
+      : "uses a structure that this tool cannot edit directly";
+  }
+  if (!lib) {
+    const pages = await rasterizeDoc(doc, file.name, msg);
+    try { doc.destroy(); } catch (e) {}
+    return { src: null, pages, note: file.name + " " + why + ", so its pages were converted to images. Text in them cannot be selected until you run OCR." };
+  }
+  const src = { name: file.name, bytes, doc, lib };
   const pages = [];
   for (let i = 0; i < doc.numPages; i++) pages.push(newPage({ t: "pdf", src, idx: i, label: file.name }));
-  return { src, pages };
+  return { src, pages, note: "" };
 }
 
 async function loadImageFile(file) {
@@ -272,17 +355,42 @@ async function loadImageFile(file) {
   }
 }
 
+function describeError(err, isPdf) {
+  const name = (err && err.name) || "";
+  const msg = (err && err.message) || String(err);
+  if (name === "PasswordCancelled") return "skipped because no password was entered";
+  if (name === "PasswordException") return "needs a password, and the password was not accepted";
+  if (isPdf) {
+    if (/(pdfjsLib|PDFLib) is not defined/.test(msg)) return "the PDF libraries did not load (" + msg + "). Reload the page. If you installed the app, check that the lib folder was uploaded next to index.html.";
+    if (/worker/i.test(msg)) return "the PDF engine could not start (" + msg + "). Reload the page. If you installed the app, check that the lib folder was uploaded next to index.html.";
+    if (name === "InvalidPDFException" || /invalid pdf|xref|header/i.test(msg)) return "is not a valid PDF or is damaged (" + msg + ")";
+    return "could not be opened (" + (name ? name + ": " : "") + msg + ")";
+  }
+  return "could not be read as an image (" + msg + "). TIFF and some other formats are not supported by the browser, please convert to JPG or PNG";
+}
+
+function missingLibs() {
+  const out = [];
+  if (!window.pdfjsLib) out.push("PDF viewer engine (pdf.js)");
+  if (!window.PDFLib) out.push("PDF writer (pdf-lib)");
+  return out;
+}
+function libsMessage(list) {
+  return "These parts of the tool did not load: " + list.join(", ") + ".\n\nReload the page. The single file version needs an internet connection. If you installed the app, make sure the whole lib folder was uploaded next to index.html.";
+}
+
 async function readFiles(files, msg) {
-  const pages = [], srcs = [], errors = [];
+  const pages = [], srcs = [], errors = [], notes = [];
   let n = 0;
   for (const f of files) {
     n++;
     msg("Reading file " + n + " of " + files.length + ": " + f.name);
     try {
       if (isPdfFile(f)) {
-        const r = await loadPdfFile(f);
-        srcs.push(r.src);
+        const r = await loadPdfFile(f, msg);
+        if (r.src) srcs.push(r.src);
         r.pages.forEach(p => pages.push(p));
+        if (r.note) notes.push(r.note);
       } else if (isImgFile(f)) {
         pages.push(await loadImageFile(f));
       } else {
@@ -290,12 +398,10 @@ async function readFiles(files, msg) {
       }
     } catch (err) {
       console.error(err);
-      errors.push(f.name + (isPdfFile(f)
-        ? ": could not be opened (damaged or password protected)"
-        : ": could not be read as an image (TIFF and some formats are not supported by the browser, please convert to JPG or PNG)"));
+      errors.push(f.name + ": " + describeError(err, isPdfFile(f)));
     }
   }
-  return { pages, srcs, errors };
+  return { pages, srcs, errors, notes };
 }
 
 /* ---------- Opening, adding, closing ---------- */
@@ -325,7 +431,9 @@ function teardown() {
 async function openFiles(files) {
   if (busy || !files.length) return;
   if (P.length && dirty && !confirm("Open new files? Changes to the current PDF that you have not saved will be lost.")) return;
-  const { pages, srcs, errors } = await readFiles(files, t => $("openMsg").textContent = t);
+  const miss = missingLibs();
+  if (miss.length) { alert(libsMessage(miss)); return; }
+  const { pages, srcs, errors, notes } = await readFiles(files, t => $("openMsg").textContent = t);
   $("openMsg").textContent = "";
   if (!pages.length) {
     alert("Could not open the file.\n\n" + errors.join("\n"));
@@ -338,6 +446,7 @@ async function openFiles(files) {
   baseName = stripExt(docLabel);
   showWorkspace(true);
   refreshGrid();
+  if (notes.length) alert(notes.join("\n\n"));
   if (errors.length) alert("Some files could not be opened:\n\n" + errors.join("\n"));
 }
 
@@ -354,9 +463,11 @@ function insertIndex() {
 
 async function addFiles(files) {
   if (busy || !P.length || !files.length) return;
+  const miss = missingLibs();
+  if (miss.length) { alert(libsMessage(miss)); return; }
   lockUI(true);
   try {
-    const { pages, srcs, errors } = await readFiles(files, t => setStatus(t));
+    const { pages, srcs, errors, notes } = await readFiles(files, t => setStatus(t));
     if (!pages.length) {
       setStatus("Ready", 0);
       alert("No pages were added.\n\n" + errors.join("\n"));
@@ -370,6 +481,7 @@ async function addFiles(files) {
     setSel(new Set(pages));
     if (pages[0].el) pages[0].el.scrollIntoView({ behavior: "smooth", block: "center" });
     setStatus("Added " + pages.length + " page(s)", 0);
+    if (notes.length) alert(notes.join("\n\n"));
     if (errors.length) alert("Some files could not be added:\n\n" + errors.join("\n"));
   } catch (err) {
     console.error(err);
@@ -584,7 +696,7 @@ async function buildPdf(ocrMap) {
   for (const src of sources) {
     const plain = P.filter(p => p.t === "pdf" && p.src === src && !ocrMap.has(p));
     if (!plain.length) continue;
-    if (!src.lib) src.lib = await PDFDocument.load(src.bytes, { ignoreEncryption: true });
+    if (!src.lib) src.lib = await PDFDocument.load(src.bytes, { updateMetadata: false });
     const cps = await out.copyPages(src.lib, plain.map(p => p.idx));
     plain.forEach((p, k) => copied.set(p, cps[k]));
   }
@@ -1101,6 +1213,15 @@ function clearSearch() {
     pg.el.querySelector(".fb").textContent = "";
   });
 }
+
+(function () {
+  const miss = missingLibs();
+  if (miss.length) {
+    const m = $("openMsg");
+    m.className = "note warn";
+    m.textContent = "Warning: " + libsMessage(miss).replace(/\n+/g, " ");
+  }
+})();
 
 $("searchBtn").onclick = doSearch;
 $("nextHit").onclick = () => goToHit(hitIdx + 1);

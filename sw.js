@@ -1,5 +1,5 @@
 // Offline cache for PDF Rotate and OCR. The version changes automatically when any file changes.
-const CACHE = "pdftool-319c965425";
+const CACHE = "pdftool-ab60c14650";
 const ASSETS = [
   "./",
   "icons/icon-192.png",
